@@ -1,0 +1,435 @@
+---
+title: "The Usefulness of Financial Accounting Information: Analysis for Online Experiment"
+author: Stefano Cascino, Mark Clatworthy, Beatriz García Osma, Joachim Gassen and Shahed Imam
+output: html_document
+date: '2020-09-28'
+---
+
+
+``` {r setup, include = FALSE}
+library(car)
+library(tidyverse)
+library(lubridate)
+library(lfe)
+library(ExPanDaR)
+library(scales)
+
+
+knitr::opts_chunk$set(echo = TRUE, table.align = "center", cache.lazy = FALSE, 
+                      message = FALSE, error = FALSE, warning = FALSE, 
+                      clean = FALSE, fig.align="center")
+library(knitr)
+opts_knit$set(root.dir = "..")
+library(kableExtra)
+
+```
+
+
+## Sample construction
+
+```{r data_import, cache=TRUE}
+resp <- read_csv("online_experiment/data/online_exp_response_data.csv")
+emails <- read_csv("online_experiment/data/online_exp_emails_sent.csv")
+```
+
+```{r sample_table, fig.width = 10}
+resp  %>%
+    filter(!is.na(time_read)) %>%
+    mutate(tstamp = ymd_hms(tstamp)) %>%
+    ggplot(aes(x = tstamp)) + 
+    geom_histogram(binwidth=3600) +
+    scale_x_datetime(
+      name = "Date and time [UTC]",
+      date_labels = "%b %d", 
+      date_breaks = "1 day",
+      date_minor_breaks = "6 hours",
+      limits = c(ymd_hms("2019-06-26 00:00:00"), 
+                 ymd_hms("2019-07-16 11:49:08")),
+      expand = c(0,0)) +
+    ylab("Responses per hour") +
+    theme_minimal()
+
+sent_wave <- as.data.frame(table(emails$wave), stringsAsFactors = FALSE)
+colnames(sent_wave) <- c("wave", "emails_sent")
+sent_wave <- cbind(sent_wave, group = c("Portfolio Manager, Rest of World",
+                                        "Portfolio Manager, Europe",
+                                        "Portfolio Manager, North America",
+                                        "Financial Analysts, Rest of World",
+                                        "Financial Analysts, Europe",
+                                        "Financial Analysts, North America"))
+sent_wave$occupation <- c(rep("Portfolio Manager", 3), rep("Financial Analyst", 3))
+sent_wave$location <- rep(c("Rest of World", "Europe", "North America"), 2)
+
+resp %>%
+  filter(!is.na(time_read)) %>%
+  mutate(did_mc = !is.na(time_check),
+         passed_both_mc = man_check_cgo_correct & 
+           man_check_emi_correct,
+         started_assignment = !is.na(time_ready),
+         completed_assignment = !is.na(time_assignment),
+         is_in_sample = completed_assignment & passed_both_mc) %>%
+  left_join(sent_wave) -> sample_screens
+
+sample_screens %>%
+  summarize(group = "Total",
+            emails_sent = sum(sent_wave$emails_sent),
+            responded = n(),
+            response_rate = n()/sum(sent_wave$emails_sent),
+            received_tment = n(),
+            did_mc = sum(did_mc)/n(), 
+            passed_both_mc = sum(passed_both_mc, na.rm = TRUE)/n(), 
+            started_assignment = sum(started_assignment)/n(),
+            completed_assignment = sum(completed_assignment)/n(),
+            in_sample = sum(is_in_sample)/n(),
+            n_in_sample = sum(is_in_sample)) -> sample_total
+
+sample_screens %>%
+  group_by(group) %>%
+  summarize(emails_sent = as.integer(min(emails_sent)),
+            responded = n(),
+            response_rate = n()/min(emails_sent),
+            did_mc = sum(did_mc)/n(), 
+            passed_both_mc = sum(passed_both_mc, na.rm = TRUE)/n(), 
+            started_assignment = sum(started_assignment)/n(),
+            completed_assignment = sum(completed_assignment)/n(),
+            in_sample = sum(is_in_sample)/n(),
+            n_in_sample = sum(is_in_sample)) %>%
+  ungroup() %>%
+  rbind(sample_total %>% select(-received_tment)) %>%
+  mutate_if(is.integer, comma) %>%
+  mutate_if(is.double, percent, accuracy = 0.1) -> resp_table
+
+
+resp_table %>%
+  kable(col.names = c("Group", 
+                      "# emails sent", 
+                      "# responded", 
+                      "Response rate",
+                      "Did manipulation checks",
+                      "Passed both manipulation checks",
+                      "Started assignment",
+                      "Completed assignment",
+                      "Included in test sample",
+                      "# in test sample"),
+        align="lrrrrrrrrr") %>%
+  kable_styling() %>%
+  row_spec(7, bold = T) 
+
+sample_screens %>%
+  group_by(treatment) %>%
+  summarize(received_tment = n(),
+            did_mc = sum(did_mc)/n(), 
+            passed_both_mc = sum(passed_both_mc, na.rm = TRUE)/n(), 
+            started_assignment = sum(started_assignment)/n(),
+            completed_assignment = sum(completed_assignment)/n(),
+            in_sample = sum(is_in_sample)/n(),
+            n_in_sample = sum(is_in_sample)) %>%
+  ungroup() %>%
+  rbind(sample_total %>% 
+          select(-emails_sent, -responded, -response_rate) %>%
+          rename(treatment = group)) %>%
+  mutate(treatment = case_when(
+    treatment == "1" ~ "Strong CG\nNo EMI", 
+    treatment == "2" ~ "Strong CG\nEMI",
+    treatment == "3" ~ "Weak CG\nNo EMI", 
+    treatment == "4" ~ "Weak CG\nEMI",
+    TRUE ~ "Total"
+  )) %>%
+  mutate_if(is.integer, comma) %>%
+  mutate_if(is.double, percent, accuracy = 0.1) -> tment_table
+
+tment_table %>%
+  kable(col.names = c("Treatment", 
+                      "# treated",
+                      "Did manipulation checks",
+                      "Passed both manipulation checks",
+                      "Started assignment",
+                      "Completed assignment",
+                      "Included in test sample",
+                      "# in test sample"),
+        align="lrrrrrrr") %>%
+  kable_styling() %>%
+  row_spec(5, bold = T) 
+```
+
+
+```{r sample_construction}
+li <- read_csv("online_experiment/data/online_exp_line_items.csv")
+
+resp %>% 
+  filter(!is.na(time_assignment)) %>%
+  select(id, treatment, man_check_cgo_correct, 
+         man_check_emi_correct, li$var[!li$fixed]) -> complete_wide
+
+complete_wide %>%
+   filter(
+     man_check_cgo_correct,
+     man_check_emi_correct
+   ) -> passed_mc_wide
+
+complete_wide %>%
+  gather(key = "line_item", value = "included", 
+         -id, -treatment, -man_check_cgo_correct, -man_check_emi_correct) %>%
+  mutate(id = factor(id),
+         line_item = factor(line_item, levels = li$var[!li$fixed]),
+         treated_cg = treatment > 2,
+         treated_em = treatment %in% c(2,4)) -> complete_long
+
+complete_long %>%
+   filter(
+     man_check_cgo_correct,
+     man_check_emi_correct
+   ) -> passed_mc_long
+```
+
+## Response times by treatment
+
+``` {r response_times}
+df <- resp %>%
+  filter(!is.na(time_assignment)) %>%
+  mutate(passed_mc = man_check_cgo_correct == "TRUE" & man_check_emi_correct == "TRUE",
+         treatment = factor(treatment, labels = c("Strong CG\nNo EMI", "Strong CG\nEMI",
+                                                "Weak CG\nNo EMI", "Weak CG\nEMI"))) %>%
+  select(treatment, passed_mc, time_read, time_check, time_ready, time_assignment)
+
+ggplot(data = df[df$time_read < 240,], 
+       aes(x = treatment, y = time_read, color = passed_mc)) +
+  geom_boxplot() + theme_minimal()
+
+ggplot(data = df[df$time_assignment < 600,], 
+       aes(x = treatment, y = time_assignment, color = passed_mc)) +
+  geom_boxplot() + theme_minimal()
+
+```
+
+
+## Probability of line item inclusion overall
+
+``` {r figure_line_item_inclusion}
+df <- complete_long
+df$line_item <- factor(df$line_item, 
+                       labels = str_wrap(li$line_item[!li$fixed], 10))
+
+ggplot(df, aes(x = line_item, y = as.numeric(included))) +
+  stat_summary(fun.y = mean, geom = "bar", color = "lightblue", fill = "lightblue") + 
+  stat_summary(fun.data = mean_se, geom = "errorbar") +
+  scale_y_continuous(name = "Percentage of respondents that include",
+                     labels = scales::percent_format(accuracy = 1)) +
+  scale_x_discrete(name ="Line item") + 
+  theme_minimal() 
+
+```
+
+## Test for difference accross relevant line items
+
+```{r test_li}
+passed_mc_wide %>%
+  select(fvg_market, fvg_model, gains_inv_property) -> df
+t.test(df$fvg_market, df$fvg_model)
+t.test(df$fvg_market, df$gains_inv_property)
+
+passed_mc_long %>%
+  filter(line_item == "fvg_market" | line_item == "fvg_model") %>%
+  select(line_item, included) %>%
+  droplevels() -> df
+tb <- table(df)
+tb
+chisq.test(tb)
+
+passed_mc_long %>%
+  filter(line_item == "fvg_market" | line_item == "gains_inv_property") %>%
+  select(line_item, included) %>%
+  droplevels() -> df
+tb <- table(df)
+tb
+chisq.test(tb)
+
+```
+
+
+## Probability of gain line item inclusion by treatment
+
+```{r figure_gain_line_items_by_tment}
+passed_mc_long %>%
+  filter(line_item != "sga",
+         line_item != "da",
+         line_item != "int_exp",
+         line_item != "tax_exp") %>%
+  mutate(line_item = factor(line_item, levels = li$var[!li$fixed],
+                            labels = paste0(str_wrap(li$line_item[!li$fixed], 10), "\n")))-> df
+
+ggplot(df, aes(x = as.factor(treatment), 
+               y = as.numeric(included), 
+               color = line_item)) +
+  stat_summary(fun.y = mean, geom = "point", 
+               size = 2, position = position_dodge(0.2)) + 
+  stat_summary(fun.data = mean_se, geom = "errorbar", 
+               width = 0.2, position = position_dodge(0.2)) +
+  theme_minimal() + 
+  scale_x_discrete(name = "Treatment", 
+                   labels = c("Strong CG\nNo EMI", "Strong CG\nEMI",
+                              "Weak CG\nNo EMI", "Weak CG\nEMI")) +
+  scale_y_continuous(name = "Probability of inclusion",
+                     labels = scales::percent_format(accuracy = 0.5)) +
+  scale_color_discrete(name = "Line item")
+```
+
+
+## Difference between discretionary and non-discretionary line item inclusion probability by treatment
+
+``` {r figure_dprob_disc_non_disc}
+passed_mc_wide %>%
+  mutate(dinclude = 0.5*fvg_model + 0.5*gains_inv_property - fvg_market,
+         treated_cg = treatment > 2,
+         treated_em = treatment %in% c(2,4)) %>%
+  select(id, treatment, treated_em, treated_cg, dinclude) -> man_desc_sample
+
+ggplot(man_desc_sample, aes(x = as.factor(treatment), y = dinclude)) +
+  stat_summary(fun.y = mean, geom = "point", 
+               size = 2) + 
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.2) +
+  theme_minimal() + 
+  scale_x_discrete(name = "Treatment", 
+                   labels = c("Strong CG\nNo EMI", "Strong CG\nEMI",
+                              "Weak CG\nNo EMI", "Weak CG\nEMI")) +
+  scale_y_continuous(name = paste("Percentage point difference in inclusion",
+                                  "probability for gain line items without", 
+                                  "and with managerial discretion", sep = "\n"),
+                     labels = unit_format(scale = 100, unit = "pp", accuracy = 0.5))
+```
+
+
+## Treatment effects for discretionary gain line items relative to non-discretionary gain litem
+
+``` {r figure_tment_effect_disc_rel_to_non_disc}
+df <- rbind(cbind(manipulation = "cg", man_desc_sample %>%
+              rename(treated = treated_cg) %>%
+                select(id, treated, dinclude)),
+      cbind(manipulation = "em", man_desc_sample %>%
+              rename(treated = treated_em) %>%
+              select(id, treated, dinclude)))
+
+ggplot(df, aes(x = treated, y = dinclude, color = manipulation)) +
+  stat_summary(fun.y = mean, geom = "point", 
+               size = 2, position = position_dodge(0.5)) + 
+  stat_summary(fun.data = mean_se, geom = "errorbar", 
+               position = position_dodge(0.5), width = 0.2) +
+  theme_minimal() + 
+  scale_x_discrete(name = "Treated?", labels = c("No", "Yes")) +
+  scale_y_continuous(name = paste("Percentage point difference in inclusion",
+                                  "probability for gain line items without", 
+                                  "and with managerial discretion", sep = "\n"),
+                     labels = unit_format(scale = 100, unit = "pp", accuracy = 0.5)) + 
+  scale_color_discrete(name = "Treatment",
+                       labels = c("Weak CG", "EM Incentives")) +
+  theme(legend.position = c(0.8, 0.2))
+```
+
+
+## Subject-level analysis
+
+``` {r sub_lev_analysis}
+lin_mod <- lm(dinclude ~ treated_cg + treated_em, data = man_desc_sample)
+summary(lin_mod)
+lin_mod <- lm(dinclude ~ treated_cg*treated_em, data = man_desc_sample)
+summary(lin_mod)
+Anova(lin_mod, type = "II")
+Anova(lin_mod, type = "III")
+linearHypothesis(lin_mod, "treated_cgTRUE + 0.5*treated_cgTRUE:treated_emTRUE = 0")
+linearHypothesis(lin_mod, "treated_emTRUE + 0.5*treated_cgTRUE:treated_emTRUE = 0")
+
+ord_mod <- MASS::polr(as.factor(dinclude) ~ treated_cg*treated_em, data = man_desc_sample)
+ctable <- coef(summary(ord_mod))
+p <- pnorm(abs(ctable[, "t value"]), lower.tail = FALSE) * 2
+ctable <- cbind(ctable, "p value" = p)
+kable(ctable[1:3,], format.args = list(scientific = F, digits = 3)) %>%
+  kable_styling()
+Anova(ord_mod, type = "II")
+
+kruskal.test(man_desc_sample$dinclude, man_desc_sample$treated_cg)
+kruskal.test(man_desc_sample$dinclude, man_desc_sample$treated_em)
+kruskal.test(man_desc_sample$dinclude, man_desc_sample$treated_em & man_desc_sample$treated_cg)
+```
+
+
+## Line-item level analysis
+
+```{r li_lev_analysis, results="asis"}
+passed_mc_wide %>%
+  select(id, treatment, li$var[!li$fixed]) %>%
+  gather(key = "line_item", value = "included", -id, -treatment) %>%
+  mutate(id = as.factor(id),
+         line_item = factor(line_item, levels = li$var[!li$fixed]),
+         treated_cg = treatment > 2,
+         treated_em = treatment %in% c(2,4),
+         man_desc = line_item == "fvg_model" | line_item == "gains_inv_property",
+         md_tcg = man_desc & treated_cg,
+         md_tem = man_desc & treated_em) -> long_df
+
+reg <- prepare_regression_table(long_df, c(rep("included", 6)), 
+                         list(c("0", "line_item", "treated_cg"),
+                              c("0", "line_item", "treated_cg", "md_tcg"),
+                              c("0", "line_item", "treated_em"),
+                              c("0", "line_item", "treated_em", "md_tem"),
+                              c("0", "line_item", "treated_cg*treated_em"),
+                              c("0", "line_item", "treated_cg*treated_em", "md_tcg*md_tem")),
+                         models = c(rep("ols", 6)),
+                         cluster = c(rep("id", 6)),
+                         format = "html")
+cat(paste(reg$table, collapse = "\n"))  
+
+long_df %>%
+  filter(line_item != "sga",
+         line_item != "da",
+         line_item != "int_exp",
+         line_item != "tax_exp") -> long_df_pos_litems
+
+reg <- prepare_regression_table(long_df_pos_litems, c(rep("included", 4)), 
+                         list(c("0", "line_item", "treated_cg", "md_tcg"),
+                              c("0", "line_item", "treated_em", "md_tem"),
+                              c("0", "line_item", "treated_cg*treated_em"),
+                              c("0", "line_item", "treated_cg*treated_em", "md_tcg*md_tem")),
+                         models = c(rep("ols", 4)),
+                         cluster = c(rep("id", 4)),
+                         format = "html")
+cat(paste(reg$table, collapse = "\n"))  
+
+reg <- prepare_regression_table(long_df_pos_litems, c(rep("included", 3)), 
+                         list(c("line_item", "md_tcg"),
+                              c("line_item", "md_tem"),
+                              c("line_item", "md_tcg*md_tem")),
+                         models = c(rep("ols", 3)),
+                         feffects = c(rep("id", 3)),
+                         cluster = rep(list(c("id", "line_item")), 3),
+                         format = "html")
+cat(paste(reg$table, collapse = "\n")) 
+
+reg <- prepare_regression_table(long_df_pos_litems, c(rep("included", 3)), 
+                         list(c("md_tcg"),
+                              c("md_tem"),
+                              c("md_tcg*md_tem")),
+                         models = c(rep("ols", 3)),
+                         feffects = rep(list(c("id", "line_item")), 3),
+                         cluster = rep(list(c("id", "line_item")), 3),
+                         format = "html")
+cat(paste(reg$table, collapse = "\n")) 
+
+reg <- prepare_regression_table(long_df_pos_litems, c(rep("included", 3)), 
+                         list(c("md_tcg"),
+                              c("md_tem"),
+                              c("md_tcg*md_tem")),
+                         models = c(rep("ols", 3)),
+                         feffects = rep(list(c("id", "line_item")), 3),
+                         cluster = rep(list("id"), 3),
+                         format = "html")
+cat(paste(reg$table, collapse = "\n")) 
+
+reg <- prepare_regression_table(long_df_pos_litems, c(rep("included", 3)), 
+                         list(c("md_tcg"),
+                              c("md_tem"),
+                              c("md_tcg*md_tem")),
+                         models = c(rep("ols", 3)),
+                         feffects = rep(list(c("id", "line_item")), 3),
+                         format = "html")
+cat(paste(reg$table, collapse = "\n")) 
+```

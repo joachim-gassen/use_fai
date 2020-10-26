@@ -1,0 +1,10 @@
+"line_item","var","value","fixed"
+"Revenue","revenue",11500,1
+"Cost of goods sold","cogs",-9500,1
+"Other selling, general and administrative expenses","sga",-800,0
+"Depreciation and amortization","da",-140,0
+"Fair value gains on marketable securities (mark to market)","fvg_market",120,0
+"Fair value gains on unlisted equity instruments (mark to model)","fvg_model",130,0
+"Gains on revaluation of investment property","gains_inv_property",125,0
+"Interest expense","int_exp",-150,0
+"Taxation expense","tax_exp",-220,0
