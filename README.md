@@ -3,7 +3,7 @@ Public Repository for "The Usefulness of Financial Accounting Information: Evide
 
 You are visiting the public repository for the study
 
-[Stefano Cascino, Mark Clatworthy, Beatriz García Osma, Joachim Gassen and Shahed Imam (2020): The Usefulness of Financial Accounting Information: Evidence from the Field.](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3008083)
+[Stefano Cascino, Mark Clatworthy, Beatriz García Osma, Joachim Gassen and Shahed Imam (2020): The Usefulness of Financial Accounting Information: Evidence from the Field, The Accounting Review (forthcoming).](https://doi.org/10.2308/TAR-2019-1030)
 
 The directory `additional_materials` contains
 
