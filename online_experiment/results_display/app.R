@@ -106,7 +106,7 @@ ui <- fluidPage(
       12,
       p("This interactive display allows you to download the data and explore",
         "the findings of the online experiment presented in the study",
-        HTML("<a href=https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3008083>",
+        HTML("<a href='https://doi.org/10.2308/TAR-2019-1030'>",
           "'The Usefulness of Financial Accounting Information: Evidence from the",
           "Field'</a>"),
           "by Stefano Cascino, Mark Clatworthy, Beatriz García Osma,",
